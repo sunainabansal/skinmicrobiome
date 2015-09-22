@@ -1,9 +1,9 @@
 ---
-title: "PCoA and RF+svm"
+title: "PCoA and RF"
 output: html_document
 ---
 
-
+##Loading packages and data files in phyloseq
 ```{r, echo=FALSE}
 list.of.packages <- c("ggplot2", "Rcpp", "phyloseq","cluster","randomForest","caret","e1071","vegan","scales","grid","doParallel","foreach")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -170,6 +170,7 @@ confusionMatrix(test$Health, predrpart)
 ###Finding important predictors for RF using Gini importance
 ```{r,echo=FALSE}
 predictors<-importance(rf)
+varImpPlot(rf)
 predictors<-data.frame(names=rownames(predictors),predictors)
 predictors<-predictors[order(-predictors[,5]),]
 predictors<-predictors[predictors$MeanDecreaseGini>0.05,]
