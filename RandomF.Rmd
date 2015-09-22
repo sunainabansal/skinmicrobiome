@@ -1,0 +1,274 @@
+---
+title: "PCoA and RF+svm"
+output: html_document
+---
+
+
+```{r, echo=FALSE}
+list.of.packages <- c("ggplot2", "Rcpp", "phyloseq","cluster","randomForest","caret","e1071","vegan","scales","grid","doParallel","foreach")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+library(phyloseq)
+library(cluster)
+library(ggplot2)
+library(randomForest)
+library(caret)
+library(e1071)
+library(vegan)
+library("scales")
+library("grid")
+library("doParallel")
+library("foreach")
+
+rich_biom = "otu_table_mc2_w_tax_no_pynast_failures.biom"
+mappingfile = "mapping_diabetes_all.txt"
+treefile = "rooted.tre"
+mydata = import_biom(rich_biom,treefile)
+map = import_qiime_sample_data(mappingfile)
+mergedata = merge_phyloseq(mydata,map)
+mydataedgeR = import_biom(rich_biom,treefile,parseFunction=parse_taxonomy_greengenes)
+edgerdata= merge_phyloseq(mydataedgeR,map)
+tax_table(edgerdata) <- tax_table(edgerdata)[, -8]
+
+readsumsdf = data.frame(nreads = sort(taxa_sums(mergedata), TRUE), sorted = 1:ntaxa(mergedata), 
+    type = "OTUs")
+readsumsdf = rbind(readsumsdf, data.frame(nreads = sort(sample_sums(mergedata), 
+    TRUE), sorted = 1:nsamples(mergedata), type = "Samples"))
+title = "Total number of reads"
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) + geom_bar(stat = "identity")
+p + ggtitle(title) + scale_y_log10() + facet_wrap(~type, 1, scales = "free")
+
+colnames(tax_table(mergedata)) <- c(k = "Kingdom", p = "Phylum", c = "Class", o ="Order", f = "Family", g = "Genus", s = "Species")
+richnessmerge<-mergedata
+
+#Rarefying and removing wound samples
+set.seed(2000)
+rarefymerge = prune_samples(sample_sums(mergedata)>25000,mergedata)
+rarefymerge = rarefy_even_depth(rarefymerge, sample.size = 25000)
+skinid=as.vector(sample_data(rarefymerge)$sampletype1!="wound")
+mergedata = prune_samples(skinid,rarefymerge)
+skinid=as.vector(sample_data(mergedata)$subject!="P3")
+mergedata = prune_samples(skinid,mergedata)
+skinid=as.vector(sample_data(mergedata)$X.SampleID!="Positive.E.coli")
+mergedata = prune_samples(skinid,mergedata)
+skinid=as.vector(sample_data(mergedata)$subject!="P4")
+mergedata = prune_samples(skinid,mergedata)
+skinid=as.vector(sample_data(mergedata)$sampletype2!="diabetic_skin_adj")
+mergedata = prune_samples(skinid,mergedata)
+rarefymerge<-mergedata
+
+wh0 = genefilter_sample(rarefymerge, filterfun_sample(function(x) x > 1), A = 0.20 * nsamples(rarefymerge))
+rarefymergefilter = prune_taxa(wh0, rarefymerge)
+rarefymerge<-rarefymergefilter
+```
+
+###Bar plot
+```{r,echo=FALSE}
+mostab20 = names(sort(taxa_sums(richnessmerge), TRUE)[1:20])
+taxab20 = cbind(tax_table(richnessmerge), familyab20 = NA)
+taxab20[mostab20, "familyab20"] <- as(tax_table(richnessmerge)[mostab20, "Family"], 
+    "character")
+tax_table(richnessmerge) <- tax_table(taxab20)
+mergedrarefy = merge_samples(richnessmerge, "sampletype1")
+sample_data(mergedrarefy)$sampletype1 <- levels(sample_data(richnessmerge)$sampletype1)
+mergedrarefy = transform_sample_counts(mergedrarefy, function(x) 100 * x/sum(x))
+prunedtop20 = prune_taxa(mostab20, mergedrarefy)
+title = "Average Taxanomic compositions"
+plot_bar(prunedtop20, "sampletype1", fill = "familyab20", title = title) + 
+    ylab("Percentage of Sequences") + ylim(0, 100)
+```
+
+###Ordination plots
+```{r,echo=FALSE}
+ordu = ordinate(rarefymerge, "PCoA", "unifrac", weighted = TRUE)
+plot_ordination(rarefymerge, ordu, color = "health")
+orduunw = ordinate(rarefymerge, "PCoA", "unifrac")
+plot_ordination(rarefymerge, orduunw, color = "health")
+```
+
+###Alpha diversity
+```{r,echo=FALSE}
+richnessmerge <- prune_taxa(taxa_sums(richnessmerge) > 0, richnessmerge)
+controlskinid=as.vector(sample_data(richnessmerge)$sampletype1=="control_skin")
+controlskindata = prune_samples(controlskinid,richnessmerge)
+controlskinid=as.vector(sample_data(controlskindata)$X.SampleID!="CP7.4.L")
+controlskindata = prune_samples(controlskinid,controlskindata)
+controlskinid=as.vector(sample_data(controlskindata)$X.SampleID!="CP7.0.L")
+controlskindata = prune_samples(controlskinid,controlskindata)
+controlskinid=as.vector(sample_data(controlskindata)$X.SampleID!="CP7.1.L")
+controlskindata = prune_samples(controlskinid,controlskindata)
+
+erDF <- estimate_richness(controlskindata, split = TRUE, measures = c("Shannon"))
+df <- data.frame(erDF, sample_data(controlskindata))
+UtestsideSkin <- wilcox.test(df[df$sampletype2=="control_skin_left","Shannon"], df[df$sampletype2=="control_skin_right","Shannon"],paired=T)
+
+#Diabeticskin 'side' paired Wilcoxon test
+diabskinid=as.vector(sample_data(richnessmerge)$sampletype1=="diabetic_skin")
+diabskindata = prune_samples(diabskinid,richnessmerge)
+erDF <- estimate_richness(diabskindata, split = TRUE, measures = c("Shannon"))
+df <- data.frame(erDF, sample_data(diabskindata))
+UtestsideDiabSkin <- wilcox.test(df[df$sampletype2=="diabetic_skin_adj","Shannon"], df[df$sampletype2=="diabetic_skin_contra","Shannon"])
+print(UtestsideDiabSkin)
+
+#Site diversity Wilcoxon test
+erDF <- estimate_richness(richnessmerge, split = TRUE, measures = c("Shannon"))
+df <- data.frame(erDF, sample_data(richnessmerge))
+Utest <- wilcox.test(df[df$sampletype1=="diabetic_skin","Shannon"], df[df$sampletype1=="wound","Shannon"])
+print(Utest)
+
+skinid=as.vector(sample_data(richnessmerge)$sampletype1!="wound")
+skindata = prune_samples(skinid,richnessmerge)
+skinid=as.vector(sample_data(skindata)$sampletype2!="diabetic_skin_adj")
+skindata = prune_samples(skinid,skindata)
+erDF <- estimate_richness(skindata, split = TRUE, measures = c("Shannon"))
+df <- data.frame(erDF, sample_data(skindata))
+Utestskin <- wilcox.test(df[df$sampletype1=="control_skin","Shannon"], df[df$sampletype1=="diabetic_skin","Shannon"])
+print(Utestskin)
+skinid=as.vector(sample_data(richnessmerge)$sampletype1!="NA")
+skindata = prune_samples(skinid,richnessmerge)
+plot_richness(skindata,x="sampletype1", measures = c("Chao1", "Shannon"), color="sampletype1") + geom_boxplot()
+```
+
+###Basic Random Forest
+```{r,echo=FALSE}
+t_otutable<-t(otu_table(rarefymerge))
+Health <- as.factor(sample_data(rarefymerge)$health)
+patientname<-sample_data(rarefymerge)$subject
+rf_data<-data.frame(Health,patientname,t_otutable)
+set.seed(250)
+rf_data$Health<-ordered(rf_data$Health,levels=c("diabetes","control"))
+uniqID<-length(unique(rf_data$patientname))
+trainingID<-sample(unique(rf_data$patientname),round(uniqID*0.5),replace=FALSE)
+train<-rf_data[rf_data$patientname %in% trainingID,]
+test<-rf_data[!rf_data$patientname %in% trainingID,]
+train<-train[-2]
+test<-test[-2]
+mtry <- tuneRF(train[-1],train$Health, ntreeTry=200,stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+print(mtry)
+print(best.m)
+rf <-randomForest(Health~.,data=train, mtry=best.m, importance=TRUE,ntree=200)
+predictionsrandomF <- predict(rf,test[-1])
+confusionMatrix(test$Health,predictionsrandomF) 
+```
+
+###Naive Bayes
+```{r,echo=FALSE}
+model <- naiveBayes(Health ~ ., train)
+predBayes<-predict(model, test[-1])
+confusionMatrix(test$Health,predBayes)
+```
+
+###rpart
+```{r,echo=FALSE}
+fitControl = trainControl( method = "cv", number = 10 )
+rparttrain <- train(Health ~ ., data = train, method = "rpart", trControl = fitControl)
+predrpart <- predict(rparttrain, test[-1])
+confusionMatrix(test$Health, predrpart)
+```
+
+###Finding important predictors for RF using Gini importance
+```{r,echo=FALSE}
+predictors<-importance(rf)
+predictors<-data.frame(names=rownames(predictors),predictors)
+predictors<-predictors[order(-predictors[,5]),]
+predictors<-predictors[predictors$MeanDecreaseGini>0.05,]
+otunames<- predictors$names
+otunames<-as.character(otunames)
+a<-substring(otunames[-16],2)
+otunames<-c(a,otunames[16])
+subsetOTU<-prune_taxa(otunames,rarefymerge)
+tax_table(subsetOTU)
+```
+###Beta diversity
+```{r,echo=FALSE}
+registerDoParallel(makeCluster(3))
+healthid=as.vector(sample_data(rarefymerge)$health!="NA")
+rarefymerged = prune_samples(healthid,rarefymerge)
+healthid=as.vector(sample_data(rarefymerge)$sampletype1!="wound")
+rarefymerged = prune_samples(healthid,rarefymerge)
+weighteduni <- phyloseq::distance(rarefymerged, method="unifrac", weighted=T, parallel=T)
+unweighteduni <- phyloseq::distance(rarefymerged, method="unifrac", parallel=T)
+df = as(sample_data(rarefymerged), "data.frame")
+weightedadonis = adonis(weighteduni ~ health, df)
+print(weightedadonis)
+unweightedadonis = adonis(unweighteduni ~ health, df)
+print(unweightedadonis)
+weightedadonis = adonis(weighteduni ~ health + subject, df)
+print(weightedadonis)
+```
+
+###Differential expression
+```{r,echo=FALSE}
+phyloseq_to_edgeR = function(physeq, group, method="RLE", ...){
+  require("edgeR")
+  require("phyloseq")
+  # Enforce orientation.
+  if( !taxa_are_rows(physeq) ){ physeq <- t(physeq) }
+  x = as(otu_table(physeq), "matrix")
+  # Add one to protect against overflow, log(0) issues.
+  x = x + 1
+  # Check `group` argument
+  if( identical(all.equal(length(group), 1), TRUE) & nsamples(physeq) > 1 ){
+    # Assume that group was a sample variable name (must be categorical)
+    group = get_variable(physeq, group)
+  }
+  # Define gene annotations (`genes`) as tax_table
+  taxonomy = tax_table(physeq, errorIfNULL=FALSE)
+  if( !is.null(taxonomy) ){
+    taxonomy = data.frame(as(taxonomy, "matrix"))
+  } 
+  # Now turn into a DGEList
+  y = DGEList(counts=x, group=group, genes=taxonomy, remove.zeros = TRUE, ...)
+  # Calculate the normalization factors
+  z = calcNormFactors(y, method=method)
+  # Check for division by zero inside `calcNormFactors`
+  if( !all(is.finite(z$samples$norm.factors)) ){
+    stop("Something wrong with edgeR::calcNormFactors on this data,
+         non-finite $norm.factors, consider changing `method` argument")
+  }
+  # Estimate dispersions
+  return(estimateTagwiseDisp(estimateCommonDisp(z)))
+}
+richnessmergedge = subset_samples(edgerdata, health!= "None")
+skinid=as.vector(sample_data(richnessmergedge)$sampletype1!="wound")
+richnessmergedge = prune_samples(skinid,richnessmergedge)
+skinid=as.vector(sample_data(richnessmergedge)$subject!="P3")
+richnessmergedge = prune_samples(skinid,richnessmergedge)
+skinid=as.vector(sample_data(richnessmergedge)$subject!="P4")
+richnessmergedge = prune_samples(skinid,richnessmergedge)
+skinid=as.vector(sample_data(richnessmergedge)$sampletype2!="diabetic_skin_adj")
+richnessmergedge = prune_samples(skinid,richnessmergedge)
+
+richness = transform_sample_counts(richnessmergedge, function(x){x/sum(x)})
+hist(log10(apply(otu_table(richness), 1, var)),
+     xlab="log10(variance)", breaks=50,
+     main="A large fraction of OTUs have very low variance")
+varianceThreshold = 1e-5
+keepOTUs = names(which(apply(otu_table(richness), 1, var) > varianceThreshold))
+richnessmergedge = prune_taxa(keepOTUs, richnessmergedge)
+dge = phyloseq_to_edgeR(richnessmergedge, group="health")
+et = exactTest(dge,pair=c("control","diabetes"))
+tt = topTags(et, n=nrow(dge$table), adjust.method="BH", sort.by="PValue")
+res = tt@.Data[[1]]
+alpha = 0.001
+sigtab = res[(res$FDR < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(richnessmergedge)[rownames(sigtab), ], "matrix"))
+dim(sigtab)
+
+theme_set(theme_bw())
+scale_fill_discrete <- function(palname = "Set1", ...) {
+    scale_fill_brewer(palette = palname, ...)
+}
+sigtabgen = subset(sigtab, !is.na(Genus))
+# Phylum order
+x = tapply(sigtabgen$logFC, sigtabgen$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Phylum = factor(as.character(sigtabgen$Phylum), levels = names(x))
+# Genus order
+x = tapply(sigtabgen$logFC, sigtabgen$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Genus = factor(as.character(sigtabgen$Genus), levels = names(x))
+ggplot(sigtabgen, aes(x = Genus, y = logFC, color = Phylum)) + geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0.5))
+```
