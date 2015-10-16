@@ -43,7 +43,7 @@ richnessmerge<-mergedata
 
 #Rarefying and removing wound samples
 set.seed(2000)
-
+rarefymerge<-mergedata
 skinid=as.vector(sample_data(rarefymerge)$sampletype1!="wound")
 mergedata = prune_samples(skinid,rarefymerge)
 skinid=as.vector(sample_data(mergedata)$subject!="P3")
