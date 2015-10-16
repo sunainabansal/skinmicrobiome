@@ -43,8 +43,7 @@ richnessmerge<-mergedata
 
 #Rarefying and removing wound samples
 set.seed(2000)
-rarefymerge = prune_samples(sample_sums(mergedata)>25000,mergedata)
-rarefymerge = rarefy_even_depth(rarefymerge, sample.size = 25000)
+
 skinid=as.vector(sample_data(rarefymerge)$sampletype1!="wound")
 mergedata = prune_samples(skinid,rarefymerge)
 skinid=as.vector(sample_data(mergedata)$subject!="P3")
@@ -57,7 +56,7 @@ skinid=as.vector(sample_data(mergedata)$sampletype2!="diabetic_skin_adj")
 mergedata = prune_samples(skinid,mergedata)
 rarefymerge<-mergedata
 
-wh0 = genefilter_sample(rarefymerge, filterfun_sample(function(x) x > 1), A = 0.20 * nsamples(rarefymerge))
+wh0 = genefilter_sample(rarefymerge, filterfun_sample(function(x) x > 1), A = 0.10 * nsamples(rarefymerge))
 rarefymergefilter = prune_taxa(wh0, rarefymerge)
 rarefymerge<-rarefymergefilter
 ```
